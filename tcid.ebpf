@@ -1,0 +1,62 @@
+name tc_8021p_push
+static
+upcase
+size
+export tc_8021p_map
+preamble
+/*
+ * This file is part of the tcid project
+ *
+ * (C) 2020 Andreas Steinmetz, ast@domdv.de
+ * The contents of this file is licensed under the GPL version 2 or, at
+ * your choice, any later version of this license.
+ */
+
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <sys/types.h>
+#include <stddef.h>
+
+#define SKB(a)		offsetof(struct __sk_buff,a)
+code
+		;
+		; save context (skb access)
+		;
+		movd    r6,r1
+		;
+		; skip if vlan header already present
+		;
+		ldxw	r0,r6,#SKB(vlan_present)
+		jne	r0,#0,done
+		;
+		; load socket priority and use range 0-15
+		;
+		ldxw	r0,r6,#SKB(priority)
+		andw	r0,#0xf
+		;
+		; lookup priority in map, done if not found
+		;
+tc_8021p_map:	ldmap	r1,#0
+		stxw	r10,r0,#-4
+		movd	r2,r10
+		addd	r2,#-4
+		fcall	BPF_FUNC_map_lookup_elem
+		jeq	r0,#0,done
+		;
+		; load priority, done if priority<1 or priority>7
+		;
+		ldxw	r3,r0,#0
+		jlt	r3,#1,done
+		jgt	r3,#7,done
+		lshw	r3,#13
+		;
+		; add vlan 0 with proper priority, ignore errors
+		;
+		movd	r1,r6
+		movw	r2,#ETH_P_8021Q
+		fcall	BPF_FUNC_skb_vlan_push
+		;
+		; done, end of queue packet processing
+		;
+done:		movd	r0,#TC_ACT_OK
+		exit
